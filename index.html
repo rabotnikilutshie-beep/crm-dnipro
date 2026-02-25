@@ -72,6 +72,10 @@
     .kv { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.06); }
     .kv:last-child { border-bottom:0; }
 
+    .sheet-embed-wrap{ margin-top:16px; }
+    .sheet-embed-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; flex-wrap:wrap; }
+    .sheet-embed-frame{ width:100%; min-height:640px; border:1px solid #30363d; border-radius:12px; background:#0d1117; }
+
     .muted{ color: rgba(230,230,230,0.7); }
     .bigNum{ font-size:28px; font-weight:800; }
 
@@ -81,15 +85,27 @@
 .modal-card{position:relative; max-width:520px; margin:8vh auto; background:rgba(13,17,23,0.96); border:1px solid #30363d; border-radius:16px; padding:14px; box-shadow: 0 20px 60px rgba(0,0,0,0.55);}
 .btn-vio{background:linear-gradient(135deg,#7c3aed,#a855f7); color:#fff; font-weight:900;}
 .btn-vio:hover{filter:brightness(1.05);}
+
+.auth-shell{max-width:360px; margin:220px auto 0; display:flex; flex-direction:column; align-items:center; gap:16px;}
+.auth-gif-wrap{width:100%; display:flex; justify-content:center;}
+.auth-gif{width:240px; max-width:100%; border-radius:12px; border:1px solid #30363d; box-shadow:0 10px 30px rgba(0,0,0,.45); object-fit:cover; background:#000;}
+#auth-box{max-width:320px; width:100%; margin:0 auto; text-align:center;}
+@media (max-height: 900px){ .auth-shell{ margin-top:140px; } }
+@media (max-width: 560px){ .auth-shell{ margin-top:90px; } .auth-gif{ width:200px; } }
 </style>
 </head>
 <body>
-<div class="card" id="auth-box" style="max-width:300px; margin:100px auto; text-align:center">
+<div class="auth-shell" id="auth-shell">
+<div class="auth-gif-wrap">
+<img alt="Ожидание авторизации" class="auth-gif" src="https://reibert.info/media/gifki-gitler-chaj-163126-gif.394052/full?d=1457731364"/>
+</div>
+<div class="card" id="auth-box">
 <h2>CRM Dnipro</h2>
 <input id="logIn" placeholder="Логин" type="text"/>
 <input id="pasIn" placeholder="Пароль" type="password"/>
 <button id="btnLogin" style="width:100%; margin-top:10px">ВОЙТИ</button>
 <div id="loginMsg" style="margin-top:10px; font-size:13px; color:#ffb3b3; display:none"></div>
+</div>
 </div>
 <div class="hidden" id="main-ui">
 <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
@@ -193,6 +209,15 @@
             </div>
 </div>
 </div>
+
+<div class="card sheet-embed-wrap" style="padding:14px">
+<div class="sheet-embed-head">
+<h3 style="margin:0">📊 Google-таблица</h3>
+<a class="btn-blue" href="https://docs.google.com/spreadsheets/d/1ai0mGxEYgTpfA5rdhDvM1R1Qk90gOYYh_kMBr_e3bZM/edit?gid=0#gid=0" rel="noopener noreferrer" style="text-decoration:none; display:inline-flex; align-items:center;" target="_blank">Открыть в новой вкладке</a>
+</div>
+<div class="muted" style="font-size:12px; margin-bottom:8px">Если таблица не отображается во встроенном окне (ограничение Google по iframe), используйте кнопку "Открыть в новой вкладке".</div>
+<iframe allow="clipboard-read; clipboard-write" class="sheet-embed-frame" loading="lazy" src="https://docs.google.com/spreadsheets/d/1ai0mGxEYgTpfA5rdhDvM1R1Qk90gOYYh_kMBr_e3bZM/edit?gid=0&amp;single=true&amp;widget=true&amp;headers=false" title="Google таблица доходов"></iframe>
+</div>
 </div>
 <div class="hidden card" id="tab-logs"><h3>📋 Лог звонков</h3><table id="table-logs"><thead><tr><th>Время</th><th>Опер</th><th>Клиент</th><th>Статус</th><th>Инфо</th></tr></thead><tbody></tbody></table></div>
 <div class="hidden" id="tab-admin">
@@ -236,11 +261,19 @@
 <hr style="border:0; border-top:1px solid #333; margin:10px 0"/>
 <select id="dbSel"></select>
 <button class="btn-blue" onclick="activateDb()">2. Активировать базу</button>
+<div style="margin-top:8px; font-size:13px">
+  <label style="display:flex; align-items:center; gap:8px; color:#c9d1d9">
+    <input id="dbAllowDup" type="checkbox" style="width:auto; margin:0"/>
+    Разрешить повторы для этой базы (игнор анти-дубля по истории)
+  </label>
+</div>
 </div>
 </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
+let dbListCache = [];
+
 async function downloadAutoNdz(){
   try{
     if(!me || me.role!=='admin'){ alert('Только для админа'); return; }
@@ -600,9 +633,14 @@ async function pollIncoming() {
 
 // --- AUTH & NAV ---
 async function login() {
+    const msgEl = document.getElementById('loginMsg');
+    const setMsg = (t) => {
+        if(!msgEl) return;
+        msgEl.style.display = t ? 'block' : 'none';
+        msgEl.textContent = t || '';
+    };
+
     try {
-        const msgEl = document.getElementById('loginMsg');
-        const setMsg = (t) => { if(!msgEl) return; msgEl.style.display = t ? 'block' : 'none'; msgEl.textContent = t || ''; };
         setMsg('');
 
         const loginEl = document.getElementById('logIn');
@@ -620,6 +658,7 @@ async function login() {
 
         if(r.ok && res.success) {
             me = res.user;
+            document.getElementById('auth-shell').classList.add('hidden');
             document.getElementById('auth-box').classList.add('hidden');
             document.getElementById('main-ui').classList.remove('hidden');
             document.getElementById('uLabel').innerText = me.login;
@@ -1521,15 +1560,28 @@ async function uploadDb() {
 async function loadDbs() {
     const r = await fetch('/api/databases');
     const d = await r.json();
-    document.getElementById('dbSel').innerHTML = d.map(db => `<option value="${db.id}">${db.name}</option>`).join('');
+    dbListCache = Array.isArray(d) ? d : [];
+    document.getElementById('dbSel').innerHTML = dbListCache.map(db => `<option value="${db.id}">${db.name}${db.allowDuplicates ? ' (повторы разрешены)' : ''}</option>`).join('');
+    syncDbAllowDupToggle();
+}
+
+function syncDbAllowDupToggle(){
+    const sel = document.getElementById('dbSel');
+    const cb = document.getElementById('dbAllowDup');
+    if(!sel || !cb) return;
+    const current = dbListCache.find(db => String(db.id) === String(sel.value));
+    cb.checked = !!(current && current.allowDuplicates);
 }
 
 async function activateDb() {
+    const dbId = document.getElementById('dbSel').value;
+    const allowDuplicates = !!document.getElementById('dbAllowDup')?.checked;
     await fetch('/api/set-active-db', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ dbId: document.getElementById('dbSel').value })
+        body: JSON.stringify({ dbId, allowDuplicates })
     });
-    alert("База выбрана!");
+    alert(allowDuplicates ? "База выбрана! Повторы для этой базы разрешены." : "База выбрана!");
+    await loadDbs();
 }
 
 async function addUser() {
@@ -1772,6 +1824,9 @@ async function setBalance(){
 
 // Ensure login handler works even if inline handlers are blocked
 document.addEventListener('DOMContentLoaded', () => {
+    const dbSel = document.getElementById('dbSel');
+    if(dbSel) dbSel.addEventListener('change', syncDbAllowDupToggle);
+
     const btn = document.getElementById('btnLogin');
     if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); login(); });
     const pass = document.getElementById('pasIn');

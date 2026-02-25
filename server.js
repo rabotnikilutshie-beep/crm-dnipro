@@ -229,7 +229,23 @@ let usedPhones = new Set();
 let usedIndices = new Set();
 
 function normPhone(p) {
-  return String(p || '').replace(/\D/g, '').replace(/^0+/, '');
+  const digits = String(p || '').replace(/\D/g, '');
+  if (!digits) return '';
+
+  // Приводим израильские номера к одному виду:
+  // 972XXXXXXXXX / 9720XXXXXXXXX / 0XXXXXXXXX -> 0XXXXXXXXX
+  if (digits.startsWith('972')) {
+    let local = digits.slice(3);
+    local = local.replace(/^0+/, '');
+    return local ? ('0' + local) : '';
+  }
+
+  if (digits.startsWith('0')) {
+    return digits.replace(/^0+/, '0');
+  }
+
+  // Для остальных форматов оставляем «как есть» без нецифровых символов.
+  return digits;
 }
 
 function loadUsedPhones() {
@@ -1148,12 +1164,23 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/databases', (req, res) => res.json(databases.map((db) => ({ id: db.id, name: db.name }))));
+app.get('/api/databases', (req, res) => res.json(databases.map((db) => ({ id: db.id, name: db.name, allowDuplicates: !!db.allowDuplicates }))));
 
 app.post('/api/set-active-db', (req, res) => {
-  activeDbId = req.body.dbId;
+  const dbId = req.body && req.body.dbId;
+  activeDbId = dbId;
+
+  const allowDuplicates = !!(req.body && req.body.allowDuplicates);
+  activeDbAllowDuplicates = allowDuplicates;
+
+  const db = databases.find((d) => String(d.id) === String(dbId));
+  if (db) {
+    db.allowDuplicates = allowDuplicates;
+    saveData(DB_FILES.db_list, databases);
+  }
+
   usedIndices.clear();
-  res.json({ success: true });
+  res.json({ success: true, allowDuplicates: activeDbAllowDuplicates });
 });
 
 app.get('/api/get-row', (req, res) => {
@@ -1167,7 +1194,7 @@ app.get('/api/get-row', (req, res) => {
     const row = db.rows[i];
     const ph = normPhone(row && row[1]);
     if (!ph) continue;
-    if (usedPhones.has(ph)) continue; // уже был в системе
+    if (!activeDbAllowDuplicates && usedPhones.has(ph)) continue; // уже был в системе
     avail.push(i);
   }
   if (avail.length === 0) return res.json({ error: 'Нет новых номеров (все уже были или база закончилась)' });
