@@ -33,6 +33,16 @@
     .order-item.return { border-left-color: #da3633; }
     .order-item.kupat { border-left-color: #d29922; }
     .order-grid { display:grid; grid-template-columns: 1fr; gap:10px; }
+    .kanban-board { display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:12px; align-items:start; }
+    .kanban-col { background: rgba(13,17,23,0.8); border:1px solid #30363d; border-radius:12px; padding:10px; min-height:120px; }
+    .kanban-col-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px; }
+    .kanban-col-title { font-size:13px; font-weight:800; color:#c9d1d9; }
+    .kanban-col-count { font-size:11px; font-weight:700; color:#8b949e; background:#161b22; border:1px solid #30363d; border-radius:999px; padding:2px 8px; }
+    .kanban-col-body { display:flex; flex-direction:column; gap:10px; }
+    .kanban-col-empty { font-size:12px; color:#8b949e; border:1px dashed #30363d; border-radius:10px; padding:10px; text-align:center; }
+    .compact-card { padding:12px; min-height:auto; border-left-width:4px; }
+    .compact-card .pill { font-size:12px; padding:4px 8px; }
+    .stacked-kanban { display:flex; flex-direction:column; gap:12px; }
     .order-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
     .order-title { font-size:18px; font-weight:800; letter-spacing:0.2px; }
     .order-phone { font-size:16px; font-weight:700; color:#9ecbff; }
@@ -867,28 +877,101 @@ async function sendResult(status) {
     nextClient(); // Сразу следующий
 }
 
+
+function renderKanbanBoard(columns, renderItem){
+    const safeColumns = Array.isArray(columns) ? columns : [];
+    if(!safeColumns.length) return '<div class="badge">Пусто</div>';
+    return `<div class="kanban-board">${safeColumns.map(col => {
+        const items = Array.isArray(col.items) ? col.items : [];
+        return `
+            <div class="kanban-col">
+                <div class="kanban-col-head">
+                    <div class="kanban-col-title">${escapeHtml(col.title || 'Колонка')}</div>
+                    <div class="kanban-col-count">${items.length}</div>
+                </div>
+                <div class="kanban-col-body">
+                    ${items.length ? items.map(renderItem).join('') : '<div class="kanban-col-empty">Пусто</div>'}
+                </div>
+            </div>
+        `;
+    }).join('')}</div>`;
+}
+
+function orderStatusTitle(status){
+    const m = {
+        'new':'Новая','re-work':'Доработка','tech_work':'В работе у техника','return':'Возврат','closer':'На банк','final':'Финал','refuse':'Отказ'
+    };
+    return m[status] || (status || '-');
+}
+
+function openPreviewModal(title, html){
+    const box = document.getElementById('previewModal');
+    const t = document.getElementById('previewModalTitle');
+    const b = document.getElementById('previewModalBody');
+    if(t) t.textContent = title || 'Карточка';
+    if(b) b.innerHTML = html || '<div class="muted">Нет данных</div>';
+    if(box) box.classList.remove('hidden');
+}
+
+function closePreviewModal(){
+    const box = document.getElementById('previewModal');
+    if(box) box.classList.add('hidden');
+}
+
+function openOrderPreview(type, id){
+    const arr = ordersCache[type] || [];
+    const o = arr.find(x => String(x.id) === String(id));
+    if(!o) return alert('Карточка не найдена');
+    const comments = renderOrderComments(Array.isArray(o.comments) ? o.comments : []);
+    const html = `
+      <div class="pillbar" style="margin-bottom:10px">
+        <span class="pill"><small>Статус</small><span class="who">${escapeHtml(orderStatusTitle(o.status))}</span></span>
+        <span class="pill"><small>Опер</small><span class="who">${escapeHtml(o.operator || '-')}</span></span>
+        <span class="pill"><small>Тех</small><span class="who">${renderChips(o.techs || (o.tech?[o.tech]:[]), 'Тех')}</span></span>
+        <span class="pill"><small>Закрыв</small><span class="who">${renderChips(o.closers || (o.closer?[o.closer]:[]), 'Закрыв')}</span></span>
+      </div>
+      <div class="kvcol"><div class="k">Клиент</div><div class="v">${escapeHtml(o.clientName || '-')}</div></div>
+      <div class="kvcol"><div class="k">Телефон</div><div class="v">${escapeHtml(o.phone || '-')}</div></div>
+      <div class="kvcol"><div class="k">Инфо</div><div class="v">${escapeHtml(o.details || '')}</div></div>
+      ${o.operatorComment ? `<div class="kvcol"><div class="k">Опер инфо</div><div class="v">${escapeHtml(o.operatorComment)}</div></div>` : ''}
+      ${o.techInfo ? `<div class="kvcol"><div class="k">Тех инфо</div><div class="v">${escapeHtml(o.techInfo)}</div></div>` : ''}
+      ${o.finalText ? `<div style="border:1px solid ${escapeAttr(o.finalColor || '#30363d')}; border-radius:10px; padding:8px; margin-top:8px">🏁 ${escapeHtml(o.finalText)}</div>` : ''}
+      ${comments}
+    `;
+    openPreviewModal(`Клиент: ${o.clientName || '-'}`, html);
+}
+
+function openKupatPreview(id){
+    const arr = window._kupatAllCache || [];
+    const o = arr.find(x => String(x.id) === String(id));
+    if(!o) return alert('Карточка не найдена');
+    const html = `
+      ${renderKupatInfoBlock(o)}
+      ${renderKupatComments(o.comments)}
+    `;
+    openPreviewModal(`Купат: ${o.clientName || '-'}`, html);
+}
+
+function renderCompactClientCard(o, actionsHtml, extraClass=''){
+    return `
+      <div class="order-item compact-card ${extraClass}">
+        <div class="order-title" style="font-size:15px">${escapeHtml(o.clientName || 'Без имени')}</div>
+        <div class="order-phone" style="font-size:14px; margin-top:4px">${escapeHtml(o.phone || '-')}</div>
+        <div class="pillbar" style="margin-top:8px">
+            <span class="pill"><small>Статус</small><span class="who">${escapeHtml(orderStatusTitle(o.status))}</span></span>
+        </div>
+        <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">${actionsHtml || ''}</div>
+      </div>
+    `;
+}
+
 // --- RENDERING LISTS ---
 async function loadOrders(type) {
     const r = await fetch(`/api/orders?login=${me.login}&role=${me.role}&view=${type}`);
     let data = await r.json();
-    try{ ordersCache[type] = Array.isArray(data) ? data : []; }catch(e){}
-    let container = '';
-    
-    // Filtering on Client (Visualization)
-// Filtering on Client (Visualization)
-if(type === 'tech') {
-    data = data.filter(o => o.status === 'new' || o.status === 're-work');
-}
-if(type === 'tech-my') {
-    data = data.filter(o => o.status === 'tech_work');
-}
-if(type === 'returns') {
-    data = data.filter(o => o.status === 'return');
-}
-if(type === 'closer') {
-    data = data.filter(o => o.status === 'closer' || o.status === 'final');
-}
-    
+    data = Array.isArray(data) ? data : [];
+    try{ ordersCache[type] = data; }catch(e){}
+
     const targetByType = {
         'my-orders': 'list-my',
         'tech': 'list-tech',
@@ -898,96 +981,71 @@ if(type === 'closer') {
     };
     const target = targetByType[type] || 'list-closer';
     
-    document.getElementById(target).innerHTML = data.reverse().map(o => {
-        const cid = `c_${type}_${o.id}`;
-        const canC = canCommentOrder(o);
-        const canUpload = (me.role==='tech'||me.role==='closer'||me.role==='admin');
-        const comments = Array.isArray(o.comments) ? o.comments : [];
-        const commentsHtml = renderOrderComments(comments);
-        const commentEditorHtml = renderOrderCommentEditor(o, cid, canC, canUpload);
+    const sorted = data.slice().reverse();
 
+    if(type === 'my-orders') {
+        const mine = sorted.filter(o => o.operator === me.login);
+        const columns = [
+            { title:'Мои', items: mine.filter(o => ['new','re-work'].includes(o.status)) },
+            { title:'В работе у техника', items: mine.filter(o => o.status === 'tech_work') },
+            { title:'Возвраты', items: mine.filter(o => o.status === 'return') },
+            { title:'Клиенты на банк', items: mine.filter(o => o.status === 'closer') }
+        ];
+        document.getElementById(target).innerHTML = renderKanbanBoard(columns, o => renderCompactClientCard(o,
+          `<button class="btn-blue" onclick="openOrderPreview('my-orders', ${o.id})">Посмотреть полностью</button>`
+        ));
+        return;
+    }
 
-        return `
-        <div class="order-item ${o.status}">
-            ${me.role === 'admin' ? `<button onclick="delItem(${o.id}, 'orders')" class="btn-red" style="float:right; padding:2px 6px; font-size:10px">X</button>` : ''}
+    if(type === 'tech') {
+        const items = sorted.filter(o => o.status === 'new' || o.status === 're-work');
+        document.getElementById(target).innerHTML = renderKanbanBoard([
+          { title:'Карточки клиентов', items }
+        ], o => renderCompactClientCard(o,
+          `<button class="btn-blue" onclick="techTakeInWork(${o.id})">Взять в работу</button>
+           <button class="btn-gray" onclick="openOrderPreview('tech', ${o.id})">Посмотреть полностью</button>`
+        ));
+        return;
+    }
 
-            <div class="order-grid">
-                <div class="order-head">
-                    <div>
-                        <div class="order-title">${escapeHtml(o.clientName || '')}</div>
-                        <div class="order-phone">${escapeHtml(o.phone || '')} <span class="badge">${escapeHtml(o.status || '')}</span></div>
-                    </div>
-                    <a href="sip:${escapeAttr(o.phone || '')}" style="display:inline-block; background:#2f81f7; color:#fff; padding:8px 12px; border-radius:10px; text-decoration:none; font-size:13px; font-weight:800;">📞 Позвонить</a>
-                </div>
+    if(type === 'tech-my') {
+        const items = sorted.filter(o => o.status === 'tech_work');
+        document.getElementById(target).innerHTML = renderKanbanBoard([
+          { title:'Мои техники', items }
+        ], o => renderCompactClientCard(o,
+          `<button class="btn-yel" onclick="openTechOrderActionModal(${o.id}, 'return')">НДЗ</button>
+           <button class="btn-red" onclick="openTechOrderActionModal(${o.id}, 'refuse')">ОТКАЗ</button>
+           <button class="btn-pur" onclick="openTechOrderActionModal(${o.id}, 'closer')">НА БАНК</button>
+           <button class="btn-gray" onclick="moveTechToCallback(${o.id})">ПЕРЕЗВОН</button>
+           <button class="btn-blue" onclick="openOrderPreview('tech-my', ${o.id})">Посмотреть полностью</button>`
+        ));
+        return;
+    }
 
-                <div class="pillbar">
-                    <span class="pill"><small>Опер</small> <span class="who">${escapeHtml(o.operator || '-')}</span></span>
-                    <span class="pill"><small>Тех</small>
-                      <span class="who" style="display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px;">
-                        ${renderChips(o.techs || (o.tech?[o.tech]:[]), 'Тех')}
-                      </span>
-                      ${(me.role==='tech'||me.role==='admin') ? `
-                        <div style="margin-top:6px; display:flex; gap:6px; align-items:center;">
-                          <select id="techSel_${cid}" style="flex:1; padding:6px; border-radius:10px; background:#0b1320; color:#fff; border:1px solid #30363d;">
-                            ${usersByRole('tech').map(u=>`<option value="${escapeAttr(u)}"${u===me.login?' selected':''}>${escapeHtml(u)} (Техник)</option>`).join('')}
-                          </select>
-                          <button class="btn-vio" style="padding:6px 10px" onclick="addAssignee(${o.id}, 'tech', 'techSel_${cid}')">+</button>
-                        </div>
-                      ` : ''}
-                    </span>
-                    <span class="pill"><small>Закрыв</small>
-                      <span class="who" style="display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px;">
-                        ${renderChips(o.closers || (o.closer?[o.closer]:[]), 'Закрыв')}
-                      </span>
-                      ${(me.role==='closer'||me.role==='admin') ? `
-                        <div style="margin-top:6px; display:flex; gap:6px; align-items:center;">
-                          <select id="closerSel_${cid}" style="flex:1; padding:6px; border-radius:10px; background:#0b1320; color:#fff; border:1px solid #30363d;">
-                            ${usersByRole('closer').map(u=>`<option value="${escapeAttr(u)}"${u===me.login?' selected':''}>${escapeHtml(u)} (Закрыв)</option>`).join('')}
-                          </select>
-                          <button class="btn-vio" style="padding:6px 10px" onclick="addAssignee(${o.id}, 'closer', 'closerSel_${cid}')">+</button>
-                        </div>
-                      ` : ''}
-                    </span>
-                </div>
+    if(type === 'returns') {
+        const items = sorted.filter(o => o.status === 'return');
+        document.getElementById(target).innerHTML = renderKanbanBoard([
+          { title:'Возвраты', items }
+        ], o => renderCompactClientCard(o,
+          `${(me.role === 'user' || me.role === 'admin') ? `<button class="btn-blue" onclick="returnToTech(${o.id})">Вернуть технику</button>` : ''}
+           <button class="btn-gray" onclick="openOrderPreview('returns', ${o.id})">Посмотреть полностью</button>`
+        ));
+        return;
+    }
 
-                <div class="kvcol">
-                    <div class="k">Инфо</div>
-                    <div class="v">${escapeHtml(o.details || '')}</div>
-                </div>
-
-                ${o.opToTechAt ? `<div class="kvcol"><div class="k">Опер→Тех</div><div class="v">${escapeHtml(formatUTC2(o.opToTechAt))}</div></div>` : ''}
-                ${o.techToCloserAt ? `<div class="kvcol"><div class="k">Тех→Закрыв</div><div class="v">${escapeHtml(formatUTC2(o.techToCloserAt))}</div></div>` : ''}
-
-                ${o.techInfo ? `<div class="kvcol"><div class="k">Тех инфо</div><div class="v">${escapeHtml(o.techInfo)}</div></div>` : ''}
-                ${o.operatorComment ? `<div class="kvcol"><div class="k">Опер инфо</div><div class="v">${escapeHtml(o.operatorComment)}</div></div>` : ''}
-                ${o.finalText ? `<div style="border:1px solid ${o.finalColor}; padding:10px; border-radius:10px; margin-top:6px"><b>🏁 ИТОГ:</b> ${escapeHtml(o.finalText)}</div>` : ''}
-
-                <div style="margin-top:8px; border-top:1px solid #30363d; padding-top:10px">
-                    ${((me.role === 'tech' || me.role === 'admin') && type==='tech-my') ? `<button class="btn-red" onclick="deleteOrderAsTech(${o.id})">Удалить карточку</button>` : ''}
-                    ${((me.role === 'tech' || me.role === 'admin') && (o.status==='new'||o.status==='re-work')) ? `<button class="btn-blue" onclick="techTakeInWork(${o.id})">ВЗЯТЬ В РАБОТУ</button>` : ''}
-
-                    ${((me.role === 'tech' || me.role === 'admin') && (o.status==='new'||o.status==='re-work'||o.status==='tech_work')) ? `<button class="btn-yel" onclick="openTechOrderActionModal(${o.id}, 'return')">НДЗ (Вернуть)</button><button class="btn-red" onclick="openTechOrderActionModal(${o.id}, 'refuse')">ОТКАЗ</button><button class="btn-pur" onclick="openTechOrderActionModal(${o.id}, 'closer')">НА ЗАКРЫВ</button><button class="btn-gray" onclick="moveTechToCallback(${o.id})">ПЕРЕЗВОН</button>` : ''}
-
-                    ${(me.role === 'user' || me.role === 'admin') && o.status==='return' ? `
-                        <button class="btn-blue" onclick="returnToTech(${o.id})">Вернуть технику</button>
-                    ` : ''}
-
-                    ${(me.role === 'closer' || me.role === 'admin') && o.status==='closer' ? `
-                        <button class="btn-blue" onclick="finalOrder(${o.id})">ФИНАЛ</button>
-                    ` : ''}
-                    ${(me.role === 'closer' || me.role === 'admin') ? `
-                        <button class="btn-vio" onclick="addOrderToNotes(${o.id}, '${type}')">В ЗАМЕТКИ</button>
-                    ` : ''}
-                </div>
-
-                ${commentsHtml}
-
-                ${commentEditorHtml}
-            </div>
-        </div>
-        `;
-    }).join('');
+    if(type === 'closer') {
+        const items = sorted.filter(o => o.status === 'closer' || o.status === 'final');
+        document.getElementById(target).innerHTML = renderKanbanBoard([
+          { title:'Закрыв', items }
+        ], o => renderCompactClientCard(o,
+          `${(me.role === 'closer' || me.role === 'admin') && o.status==='closer' ? `<button class="btn-blue" onclick="finalOrder(${o.id})">ФИНАЛ</button>` : ''}
+           ${(me.role === 'closer' || me.role === 'admin') ? `<button class="btn-vio" onclick="addOrderToNotes(${o.id}, 'closer')">В ЗАМЕТКИ</button>` : ''}
+           <button class="btn-gray" onclick="openOrderPreview('closer', ${o.id})">Посмотреть полностью</button>`
+        ));
+        return;
+    }
 }
+
 
 function renderKupatInfoBlock(o){
     const operator = o.operatorFrom || o.operator || '-';
@@ -1088,6 +1146,8 @@ function renderOrderCommentEditor(o, cid, canC, canUpload){
 async function loadKupat() {
     const r = await fetch(`/api/kupat/list?login=${me.login}&role=${me.role}&view=${me.role==='kupat'?'incoming':'for-closer'}`);
     const data = await r.json();
+	const rows = Array.isArray(data) ? data : [];
+    window._kupatAllCache = rows;
 
     const kupatAssignees = [...usersByRole('kupat'), ...usersByRole('admin')].filter((u, i, arr) => u && arr.indexOf(u) === i);
     const closerAssignees = [...usersByRole('closer'), ...usersByRole('admin')].filter((u, i, arr) => u && arr.indexOf(u) === i);
@@ -1095,114 +1155,79 @@ async function loadKupat() {
     const renderIncomingItem = (o) => {
         const selectedUser = o.kupatUser || me.login;
         const assigneeSelectId = `kupatAssignee_${o.id}`;
-        return `
-        <div class="order-item kupat">
-            ${(me.role === 'admin') ? `<button onclick="delItem(${o.id}, 'kupat')" class="btn-red" style="float:right; padding:2px 6px; font-size:10px">X</button>` : ''}
-            <div class="order-head">
-                <div>
-                    <div class="order-title">${escapeHtml(o.clientName || '')}</div>
-                    <div class="order-phone">${escapeHtml(o.phone || '')}</div>
-                </div>
-                <a href="sip:${escapeAttr(o.phone || '')}" style="display:inline-block; background:#2f81f7; color:#fff; padding:8px 12px; border-radius:10px; text-decoration:none; font-size:13px; font-weight:800" onclick="trackEvent('CALL', '${escapeAttr(o.phone || '')}')">📞 ЗВОНОК КУПАТ</a>
-            </div>
-
-            ${renderKupatInfoBlock(o)}
-
-            <div style="margin-top:10px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-                <select id="${assigneeSelectId}" style="min-width:200px; max-width:280px; background:#0b1320; color:#fff; border:1px solid #30363d; border-radius:8px; padding:6px;">
-                    ${(kupatAssignees.length ? kupatAssignees : [me.login]).map(u=>`<option value="${escapeAttr(u)}" ${u===selectedUser?'selected':''}>${escapeHtml(u)}</option>`).join('')}
-                </select>
-                <button style="background:#238636" onclick="kupatTakeInWork(${o.id}, '${assigneeSelectId}')">ВЗЯТЬ В РАБОТУ</button>
-                <button class="btn-red" onclick="kupatTakeRefuse(${o.id}, '${assigneeSelectId}')">ОТКАЗ</button>
-            </div>
-        </div>`;
+        return renderCompactClientCard(o, `
+            <select id="${assigneeSelectId}" style="min-width:170px; background:#0b1320; color:#fff; border:1px solid #30363d; border-radius:8px; padding:6px;">
+              ${(kupatAssignees.length ? kupatAssignees : [me.login]).map(u=>`<option value="${escapeAttr(u)}" ${u===selectedUser?'selected':''}>${escapeHtml(u)}</option>`).join('')}
+            </select>
+            <button class="btn-blue" onclick="kupatTakeInWork(${o.id}, '${assigneeSelectId}')">Взять в работу</button>
+            <button class="btn-red" onclick="kupatTakeRefuse(${o.id}, '${assigneeSelectId}')">Отказ</button>
+            <button class="btn-gray" onclick="openKupatPreview(${o.id})">Посмотреть полностью</button>
+        `, 'kupat');
     };
 
     const renderCloserItem = (o) => {
         const closerSel = `kupatCloserSel_${o.id}`;
         const currentCloser = o.closer || me.login;
-        return `
-        <div class="order-item kupat">
-            ${(me.role === 'admin') ? `<button onclick="delItem(${o.id}, 'kupat')" class="btn-red" style="float:right; padding:2px 6px; font-size:10px">X</button>` : ''}
-            <div class="order-head">
-                <div>
-                    <div class="order-title">${escapeHtml(o.clientName || '')}</div>
-                    <div class="order-phone">${escapeHtml(o.phone || '')}</div>
-                </div>
-                <a href="sip:${escapeAttr(o.phone || '')}" style="display:inline-block; background:#2f81f7; color:#fff; padding:8px 12px; border-radius:10px; text-decoration:none; font-size:13px; font-weight:800" onclick="trackEvent('CALL', '${escapeAttr(o.phone || '')}')">📞 ЗВОНОК</a>
-            </div>
-
-            ${renderKupatInfoBlock(o)}
-
+        return renderCompactClientCard(o, `
             ${(me.role === 'closer' || me.role === 'admin') && o.status === 'kupat_to_closer' ? `
-                <div style="margin-top:10px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-                    <select id="${closerSel}" style="min-width:220px; max-width:320px; padding:6px; border-radius:10px; background:#0b1320; color:#fff; border:1px solid #30363d;">
-                        ${(closerAssignees.length ? closerAssignees : [me.login]).map(u=>`<option value="${escapeAttr(u)}" ${u===currentCloser?'selected':''}>${escapeHtml(u)} (Закрыв)</option>`).join('')}
-                    </select>
-                    <button class="btn-vio" style="padding:6px 10px" onclick="kupatAssignCloser(${o.id}, '${closerSel}')">+</button>
-                    <button class="btn-blue" onclick="kupatFinal(${o.id})">ФИНАЛ КУПАТ</button>
-                </div>
+              <select id="${closerSel}" style="min-width:180px; padding:6px; border-radius:10px; background:#0b1320; color:#fff; border:1px solid #30363d;">
+                ${(closerAssignees.length ? closerAssignees : [me.login]).map(u=>`<option value="${escapeAttr(u)}" ${u===currentCloser?'selected':''}>${escapeHtml(u)}</option>`).join('')}
+              </select>
+              <button class="btn-vio" onclick="kupatAssignCloser(${o.id}, '${closerSel}')">Назначить</button>
+              <button class="btn-blue" onclick="kupatFinal(${o.id})">Финал</button>
             ` : ''}
-        </div>`;
+            <button class="btn-gray" onclick="openKupatPreview(${o.id})">Посмотреть полностью</button>
+        `, 'kupat');
     };
 
+    const sorted = rows.slice().reverse();
     if (me.role === 'kupat' || me.role === 'admin') {
-        document.getElementById('list-kupat').innerHTML = data.slice().reverse().map(renderIncomingItem).join('') || '<div class="badge">Пусто</div>';
+        const cols = [
+            { title:'Новые от опера', items: sorted.filter(o => o.status === 'new') }
+        ];
+        document.getElementById('list-kupat').innerHTML = renderKanbanBoard(cols, renderIncomingItem);
     } else {
-        document.getElementById('list-kupat').innerHTML = data.slice().reverse().map(renderCloserItem).join('') || '<div class="badge">Пусто</div>';
+        const cols = [
+            { title:'Входящие на закрыв', items: sorted.filter(o => o.status === 'kupat_to_closer') },
+            { title:'Финал', items: sorted.filter(o => o.status === 'kupat_final') }
+        ];
+        document.getElementById('list-kupat').innerHTML = renderKanbanBoard(cols, renderCloserItem);
     }
 }
+
 
 async function loadKupatMyClients() {
     const r = await fetch(`/api/kupat/list?login=${me.login}&role=${me.role}&view=all`);
     const data = await r.json();
     const mine = (Array.isArray(data) ? data : []).filter(o => o.kupatUser === me.login);
+	window._kupatAllCache = Array.isArray(data) ? data : [];
+
 
     const active = mine.filter(o => o.status === 'kupat_work');
     const archive = mine.filter(o => ['kupat_ndz','kupat_auto','kupat_ivrit','kupat_refuse','kupat_final'].includes(o.status));
 
-    const renderMine = (o) => `
-        <div class="order-item kupat">
-            ${(me.role === 'kupat' || me.role === 'admin') && ['kupat_ndz','kupat_auto','kupat_ivrit','kupat_refuse','kupat_final'].includes(o.status) ? `<button onclick="delItem(${o.id}, 'kupat')" class="btn-red" style="float:right; padding:2px 6px; font-size:10px">X</button>` : ''}
-            <div class="order-head">
-                <div>
-                    <div class="order-title">${escapeHtml(o.clientName || '')}</div>
-                    <div class="order-phone">${escapeHtml(o.phone || '')}</div>
-                </div>
-                <a href="sip:${escapeAttr(o.phone || '')}" style="display:inline-block; background:#2f81f7; color:#fff; padding:8px 12px; border-radius:10px; text-decoration:none; font-size:13px; font-weight:800" onclick="trackEvent('CALL', '${escapeAttr(o.phone || '')}')">📞 ЗВОНОК КУПАТ</a>
-            </div>
+    const renderMine = (o) => renderCompactClientCard(o, `
+        ${o.status === 'kupat_work' ? `
+            <button class="btn-yel" onclick="kupatAction(${o.id}, 'kupat_ndz')">НДЗ</button>
+            <button class="btn-blue" onclick="kupatAction(${o.id}, 'kupat_auto')">АВТО</button>
+            <button class="btn-pur" onclick="kupatAction(${o.id}, 'kupat_ivrit')">ИВРИТ</button>
+            <button style="background:#238636" onclick="kupatAction(${o.id}, 'kupat_to_closer')">Передать</button>
+            <button class="btn-red" onclick="kupatAction(${o.id}, 'kupat_refuse')">Отказ</button>
+            <button class="btn-gray" onclick="moveKupatToCallback(${o.id})">Перезвон</button>
+        ` : ''}
+        <button class="btn-gray" onclick="openKupatPreview(${o.id})">Посмотреть полностью</button>
+    `, 'kupat');
 
-            ${renderKupatInfoBlock(o)}
-
-            <div style="margin-top:10px">
-                ${o.status === 'kupat_work' ? `
-                    <button class="btn-yel" onclick="kupatAction(${o.id}, 'kupat_ndz')">НДЗ</button>
-                    <button class="btn-blue" onclick="kupatAction(${o.id}, 'kupat_auto')">АВТО</button>
-                    <button class="btn-pur" onclick="kupatAction(${o.id}, 'kupat_ivrit')">ИВРИТ</button>
-                    <button style="background:#238636" onclick="kupatAction(${o.id}, 'kupat_to_closer')">ПЕРЕДАТЬ</button>
-                    <button class="btn-red" onclick="kupatAction(${o.id}, 'kupat_refuse')">ОТКАЗ</button>
-                    <button class="btn-gray" onclick="moveKupatToCallback(${o.id})">ПЕРЕЗВОН</button>
-                ` : ''}
-            </div>
-			
-			${renderKupatComments(o.comments)}
-
-            ${renderKupatCommentEditor(o)}
-        </div>
-    `;
-	
-    document.getElementById('list-kupat-my-clients').innerHTML = `
-        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px">
-            <span class="badge">В работе: ${active.length}</span>
-            <span class="badge">Архив: ${archive.length}</span>
-        </div>
-		<h4 style="margin:10px 0 5px 0">👴 Мои клиенты (в работе)</h4>
-        ${active.slice().reverse().map(renderMine).join('') || '<div class="badge">Пусто</div>'}
-        <h4 style="margin:15px 0 5px 0">📚 Архив</h4>
-        ${archive.slice().reverse().map(renderMine).join('') || '<div class="badge">Пусто</div>'}
-        </div>
+    const workBoard = renderKanbanBoard([{ title:'В работе', items: active.slice().reverse() }], renderMine);
+    const archiveBoard = renderKanbanBoard([{ title:'Архив', items: archive.slice().reverse() }], renderMine);
+    document.getElementById('list-kupat-my-clients').innerHTML = renderKanbanBoard([
+      <div class="stacked-kanban">
+        ${workBoard}
+        ${archiveBoard}
+      </div>
     `;
 }
+
 
 async function loadKupatMyTransfers() {
     const r = await fetch(`/api/kupat/list?login=${me.login}&role=${me.role}&view=all`);
@@ -1224,14 +1249,10 @@ async function loadKupatMyTransfers() {
             ${renderKupatInfoBlock(o)}
         </div>
     `;
-
-    document.getElementById('list-kupat-my-transfers').innerHTML = `
-        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px">
-            <span class="badge">В работе: ${inWork.length}</span>
-            <span class="badge">Закрыто: ${closed.length}</span>
-        </div>
-        ${mineTransfers.slice().reverse().map(renderTransfer).join('') || '<div class="badge">Пусто</div>'}
-    `;
+    document.getElementById('list-kupat-my-transfers').innerHTML = renderKanbanBoard([
+        { title:'В работе', items: inWork.slice().reverse() },
+        { title:'Закрыто', items: closed.slice().reverse() }
+    ], renderTransfer);
 }
 
 
@@ -2289,7 +2310,7 @@ async function loadCallbacks(){
   const canOperatorCallbackActions = me.role === 'user' || me.role === 'admin';
   const canKupatCallbackActions = me.role === 'kupat';
 
-  el.innerHTML = rows.slice().reverse().map(c => {
+  const renderCallbackCard = (c) => {
     const techActions = canTechCallbackActions
       ? `<button class="btn-yel" onclick="openTechCallbackActionModal('${escapeAttr(c.id)}','return')">НДЗ (Вернуть)</button>
          <button class="btn-red" onclick="openTechCallbackActionModal('${escapeAttr(c.id)}','refuse')">ОТКАЗ</button>
@@ -2304,7 +2325,6 @@ async function loadCallbacks(){
          <button style="background:#e67e22" onclick="callbackQuickResult('${escapeAttr(c.id)}','НА КУПАТ')">НА КУПАТ</button>
          <button style="background:#238636" onclick="callbackQuickResult('${escapeAttr(c.id)}','ПЕРЕДАЛ')">ПЕРЕДАЛ</button>`
       : '';
-	  
 
     const kupatActions = canKupatCallbackActions
       ? `<button class="btn-red" onclick="callbackQuickResult('${escapeAttr(c.id)}','ОТКАЗ')">ОТКАЗ</button>
@@ -2340,8 +2360,16 @@ async function loadCallbacks(){
       </div>
     </div>
   `;
-  }).join('');
+  };
 
+  const sorted = rows.slice().reverse();
+  const columns = [
+    { title:'Без привязки', items: sorted.filter(c => !c.card || !c.card.status) },
+    { title:'В работе', items: sorted.filter(c => ['new','re-work','tech_work','closer','kupat_work','kupat_to_closer'].includes((c.card && c.card.status) || '')) },
+    { title:'Завершено', items: sorted.filter(c => ['final','refuse','return','kupat_final','kupat_refuse','kupat_ndz','kupat_auto','kupat_ivrit'].includes((c.card && c.card.status) || '')) }
+  ];
+
+  el.innerHTML = renderKanbanBoard(columns, renderCallbackCard);
   window._callbacksCache = rows;
 }
 
@@ -2492,6 +2520,18 @@ async function createOrderToTech(){
 }
 
 </script>
+
+<!-- Preview modal -->
+<div id="previewModal" class="modal hidden">
+  <div class="modal-backdrop" onclick="closePreviewModal()"></div>
+  <div class="modal-card" style="max-width:760px; max-height:86vh; overflow:auto;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+      <div style="font-weight:900;" id="previewModalTitle">Карточка</div>
+      <button class="btn-gray" onclick="closePreviewModal()">✕</button>
+    </div>
+    <div id="previewModalBody" style="margin-top:10px"></div>
+  </div>
+</div>
 
 <!-- Tech action modal -->
 <div id="techActionModal" class="modal hidden">
