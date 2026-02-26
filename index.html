@@ -40,8 +40,31 @@
     .kanban-col-count { font-size:11px; font-weight:700; color:#8b949e; background:#161b22; border:1px solid #30363d; border-radius:999px; padding:2px 8px; }
     .kanban-col-body { display:flex; flex-direction:column; gap:10px; }
     .kanban-col-empty { font-size:12px; color:#8b949e; border:1px dashed #30363d; border-radius:10px; padding:10px; text-align:center; }
-    .compact-card { padding:12px; min-height:auto; border-left-width:4px; }
-    .compact-card .pill { font-size:12px; padding:4px 8px; }
+    .compact-card { 
+      padding:14px;
+      min-height:auto;
+      border-left-width:6px;
+      border-radius:12px;
+      background: rgba(33,38,45,0.92);
+      border:1px solid #30363d;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+      color:#e6edf3;
+    }
+    .compact-card .order-head { margin-bottom:8px; }
+    .compact-card .order-title { color:#e6edf3; font-size:18px; font-weight:800; line-height:1.2; letter-spacing:0.2px; }
+    .compact-card .order-phone { color:#9ecbff; font-size:15px; font-weight:700; }
+    .compact-card .pillbar { margin-top:6px; }
+    .compact-card .pill { font-size:12px; padding:4px 8px; border-color:#30363d; background:#161b22; color:#e6edf3; }
+    .compact-card .pill small { color:#8b949e; }
+    .compact-card .pill .who { color:#e6edf3; }
+    .compact-card .card-meta { display:grid; grid-template-columns: 1fr auto; gap:6px 10px; border-top:1px solid #30363d; border-bottom:1px solid #30363d; margin-top:8px; padding:10px 0; }
+    .compact-card .card-meta .k { color:#8b949e; font-size:12px; }
+    .compact-card .card-meta .v { color:#e6edf3; font-size:13px; font-weight:700; text-align:right; }
+    .compact-card .card-actions { display:flex; align-items:center; justify-content:space-between; margin-top:10px; gap:8px; }
+    .compact-card .card-actions .label { font-size:14px; color:#c9d1d9; font-weight:700; }
+    .compact-card .card-actions .action-buttons { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+    .compact-card .card-call { display:inline-block; background:#2f81f7; color:#fff; padding:8px 12px; border-radius:10px; text-decoration:none; font-size:12px; font-weight:800; }
+    .compact-comment-wrap { margin-top:8px; }
     .stacked-kanban { display:flex; flex-direction:column; gap:12px; }
     .order-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
     .order-title { font-size:18px; font-weight:800; letter-spacing:0.2px; }
@@ -952,16 +975,48 @@ function openKupatPreview(id){
     openPreviewModal(`Купат: ${o.clientName || '-'}`, html);
 }
 
-function renderCompactClientCard(o, actionsHtml, extraClass=''){
+function renderCompactOrderCommentsBlock(o){
+    const comments = renderOrderComments(Array.isArray(o.comments) ? o.comments : []);
+    const cid = `order_comment_${o.id}`;
+    const canC = canCommentOrder(o);
+    const canUpload = (me.role === 'tech' || me.role === 'closer' || me.role === 'admin');
+    const editor = renderOrderCommentEditor(o, cid, canC, canUpload);
+    if(!comments && !editor) return '';
+    return `<div class="compact-comment-wrap">${comments || ''}${editor || ''}</div>`;
+}
+
+function renderCompactClientCard(o, actionsHtml, extraClass='', withOrderComments=false){
+    const created = o.createdAt || o.time || o.date || '';
+    const createdText = created ? formatDateTimeRuUTC2(created) : '—';
+    const owner = o.operator || o.kupatUser || o.tech || '-';
+    const phone = escapeHtml(o.phone || '-');
+    const safePhoneAttr = escapeAttr(o.phone || '');
     return `
       <div class="order-item compact-card ${extraClass}">
-        <div class="order-title" style="font-size:15px">${escapeHtml(o.clientName || 'Без имени')}</div>
-        <div class="order-phone" style="font-size:14px; margin-top:4px">${escapeHtml(o.phone || '-')}</div>
-        <div class="pillbar" style="margin-top:8px">
+        <div class="order-head">
+          <div>
+            <div class="order-title">${escapeHtml(o.clientName || 'Без имени')}</div>
+            <div class="order-phone">${phone}</div>
+          </div>
+          ${o.phone ? `<a href="sip:${safePhoneAttr}" class="card-call" onclick="trackEvent('CALL', '${safePhoneAttr}')">📞 ЗВОНОК</a>` : ''}
+        </div>
+        <div class="pillbar">
             <span class="pill"><small>Статус</small><span class="who">${escapeHtml(orderStatusTitle(o.status))}</span></span>
         </div>
-        <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">${actionsHtml || ''}</div>
+        <div class="card-meta">
+          <div class="k">Ответственный</div>
+          <div class="v">${escapeHtml(owner)}</div>
+          <div class="k">Дата</div>
+          <div class="v">${escapeHtml(createdText)}</div>
+          <div class="k">ID</div>
+          <div class="v">${escapeHtml(String(o.id || '-'))}</div>
+        </div>
+        <div class="card-actions">
+          <div class="label">Задачи</div>
+          <div class="action-buttons">${actionsHtml || ''}</div>
+        </div>
       </div>
+      ${withOrderComments ? renderCompactOrderCommentsBlock(o) : ''}
     `;
 }
 
@@ -992,7 +1047,7 @@ async function loadOrders(type) {
             { title:'Клиенты на банк', items: mine.filter(o => o.status === 'closer') }
         ];
         document.getElementById(target).innerHTML = renderKanbanBoard(columns, o => renderCompactClientCard(o,
-          `<button class="btn-blue" onclick="openOrderPreview('my-orders', ${o.id})">Посмотреть полностью</button>`
+          `<button class="btn-blue" onclick="openOrderPreview('my-orders', ${o.id})">Посмотреть полностью</button>`, '', true
         ));
         return;
     }
@@ -1003,7 +1058,7 @@ async function loadOrders(type) {
           { title:'Карточки клиентов', items }
         ], o => renderCompactClientCard(o,
           `<button class="btn-blue" onclick="techTakeInWork(${o.id})">Взять в работу</button>
-           <button class="btn-gray" onclick="openOrderPreview('tech', ${o.id})">Посмотреть полностью</button>`
+           <button class="btn-gray" onclick="openOrderPreview('tech', ${o.id})">Посмотреть полностью</button>`, '', true
         ));
         return;
     }
@@ -1017,7 +1072,7 @@ async function loadOrders(type) {
            <button class="btn-red" onclick="openTechOrderActionModal(${o.id}, 'refuse')">ОТКАЗ</button>
            <button class="btn-pur" onclick="openTechOrderActionModal(${o.id}, 'closer')">НА БАНК</button>
            <button class="btn-gray" onclick="moveTechToCallback(${o.id})">ПЕРЕЗВОН</button>
-           <button class="btn-blue" onclick="openOrderPreview('tech-my', ${o.id})">Посмотреть полностью</button>`
+           <button class="btn-blue" onclick="openOrderPreview('tech-my', ${o.id})">Посмотреть полностью</button>`, '', true
         ));
         return;
     }
@@ -1028,7 +1083,7 @@ async function loadOrders(type) {
           { title:'Возвраты', items }
         ], o => renderCompactClientCard(o,
           `${(me.role === 'user' || me.role === 'admin') ? `<button class="btn-blue" onclick="returnToTech(${o.id})">Вернуть технику</button>` : ''}
-           <button class="btn-gray" onclick="openOrderPreview('returns', ${o.id})">Посмотреть полностью</button>`
+           <button class="btn-gray" onclick="openOrderPreview('returns', ${o.id})">Посмотреть полностью</button>`, '', true
         ));
         return;
     }
@@ -1040,7 +1095,7 @@ async function loadOrders(type) {
         ], o => renderCompactClientCard(o,
           `${(me.role === 'closer' || me.role === 'admin') && o.status==='closer' ? `<button class="btn-blue" onclick="finalOrder(${o.id})">ФИНАЛ</button>` : ''}
            ${(me.role === 'closer' || me.role === 'admin') ? `<button class="btn-vio" onclick="addOrderToNotes(${o.id}, 'closer')">В ЗАМЕТКИ</button>` : ''}
-           <button class="btn-gray" onclick="openOrderPreview('closer', ${o.id})">Посмотреть полностью</button>`
+           <button class="btn-gray" onclick="openOrderPreview('closer', ${o.id})">Посмотреть полностью</button>`, '', true
         ));
         return;
     }
@@ -1183,7 +1238,7 @@ async function loadKupat() {
     const sorted = rows.slice().reverse();
     if (me.role === 'kupat' || me.role === 'admin') {
         const cols = [
-            { title:'Новые от опера', items: sorted.filter(o => o.status === 'new') }
+            { title:'Новые от опера', items: sorted.filter(o => o.status === 'kupat_new' || o.status === 'new') }
         ];
         document.getElementById('list-kupat').innerHTML = renderKanbanBoard(cols, renderIncomingItem);
     } else {
@@ -1220,7 +1275,7 @@ async function loadKupatMyClients() {
 
     const workBoard = renderKanbanBoard([{ title:'В работе', items: active.slice().reverse() }], renderMine);
     const archiveBoard = renderKanbanBoard([{ title:'Архив', items: archive.slice().reverse() }], renderMine);
-    document.getElementById('list-kupat-my-clients').innerHTML = renderKanbanBoard([
+    document.getElementById('list-kupat-my-clients').innerHTML = `
       <div class="stacked-kanban">
         ${workBoard}
         ${archiveBoard}
