@@ -35,6 +35,7 @@ const DB_FILES = {
   orders: 'orders.json',
   kupat: 'kupat_db.json',
   db_list: 'databases.json',
+  deleted_db_list: 'deleted_databases.json',
   notes: 'notes.json',
   // Анти-повторы: список уже использованных телефонов (между операторами + после рестарта)
   used_phones: 'used_phones.json',
@@ -93,6 +94,7 @@ function loadArrayData(file) {
 
 // ensure notes storage
 if (!fs.existsSync(DB_FILES.notes)) saveData(DB_FILES.notes, []);
+if (!fs.existsSync(DB_FILES.deleted_db_list)) saveData(DB_FILES.deleted_db_list, []);
 
 
 
@@ -276,7 +278,31 @@ function saveUsedPhones() {
 loadUsedPhones();
 
 let databases = loadData(DB_FILES.db_list, []);
+let deletedDatabases = loadData(DB_FILES.deleted_db_list, []);
 let activeDbId = null;
+
+function dbAvailableRowsCount(db) {
+  if (!db || !Array.isArray(db.rows)) return 0;
+  let count = 0;
+  for (let i = 0; i < db.rows.length; i++) {
+    const row = db.rows[i];
+    const ph = normPhone(row && row[1]);
+    if (!ph) continue;
+    if (usedPhones.has(ph)) continue;
+    count++;
+  }
+  return count;
+}
+
+function normalizeDbMeta(db) {
+  if (!db || typeof db !== 'object') return db;
+  if (!db.uploadedAt) db.uploadedAt = nowUtc2Str();
+  if (!db.lastActivatedAt) db.lastActivatedAt = null;
+  return db;
+}
+
+databases = (Array.isArray(databases) ? databases : []).map(normalizeDbMeta);
+deletedDatabases = Array.isArray(deletedDatabases) ? deletedDatabases : [];
 
 
 // --- АВТОРИЗАЦИЯ ---
@@ -1157,6 +1183,8 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
   databases.push({
     id: Date.now(),
     name: req.file.originalname,
+    uploadedAt: nowUtc2Str(),
+    lastActivatedAt: null,
     rows: rows.filter((r) => r.length > 0 && r[0]),
   });
   saveData(DB_FILES.db_list, databases);
@@ -1164,7 +1192,60 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/databases', (req, res) => res.json(databases.map((db) => ({ id: db.id, name: db.name, allowDuplicates: !!db.allowDuplicates }))));
+app.get('/api/databases', (req, res) => {
+  const list = (Array.isArray(databases) ? databases : []).map((db) => ({
+    id: db.id,
+    name: db.name,
+    allowDuplicates: !!db.allowDuplicates,
+    uploadedAt: db.uploadedAt || null,
+    lastActivatedAt: db.lastActivatedAt || null,
+    totalRows: Array.isArray(db.rows) ? db.rows.length : 0,
+    availableRows: dbAvailableRowsCount(db),
+    isActive: String(db.id) === String(activeDbId)
+  }));
+  const deleted = deletedDatabases.map((db) => ({
+    id: db.id,
+    name: db.name,
+    uploadedAt: db.uploadedAt || null,
+    lastActivatedAt: db.lastActivatedAt || null,
+    deletedAt: db.deletedAt || null,
+    totalRows: Number(db.totalRows || 0),
+    availableRows: Number(db.availableRows || 0),
+    deletedBy: db.deletedBy || ''
+  }));
+  res.json({ active: list, deleted });
+});
+
+app.post('/api/databases/delete', (req, res) => {
+  const { dbId, login, role } = req.body || {};
+  if (!dbId) return res.status(400).json({ success: false, error: 'db_required' });
+  if (!(role === 'admin')) return res.status(403).json({ success: false, error: 'forbidden' });
+
+  const idx = databases.findIndex((d) => String(d.id) === String(dbId));
+  if (idx < 0) return res.status(404).json({ success: false, error: 'not_found' });
+
+  const db = databases[idx];
+  const archiveItem = {
+    id: db.id,
+    name: db.name,
+    uploadedAt: db.uploadedAt || null,
+    lastActivatedAt: db.lastActivatedAt || null,
+    deletedAt: nowUtc2Str(),
+    deletedBy: String(login || ''),
+    totalRows: Array.isArray(db.rows) ? db.rows.length : 0,
+    availableRows: dbAvailableRowsCount(db)
+  };
+  deletedDatabases.push(archiveItem);
+  saveData(DB_FILES.deleted_db_list, deletedDatabases);
+
+  databases.splice(idx, 1);
+  if (String(activeDbId) === String(dbId)) {
+    activeDbId = null;
+    usedIndices.clear();
+  }
+  saveData(DB_FILES.db_list, databases);
+  res.json({ success: true, archived: archiveItem });
+});
 
 app.post('/api/set-active-db', (req, res) => {
   const dbId = req.body && req.body.dbId;
@@ -1176,6 +1257,7 @@ app.post('/api/set-active-db', (req, res) => {
   const db = databases.find((d) => String(d.id) === String(dbId));
   if (db) {
     db.allowDuplicates = allowDuplicates;
+    db.lastActivatedAt = nowUtc2Str();
     saveData(DB_FILES.db_list, databases);
   }
 

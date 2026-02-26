@@ -85,6 +85,14 @@
 .modal-card{position:relative; max-width:520px; margin:8vh auto; background:rgba(13,17,23,0.96); border:1px solid #30363d; border-radius:16px; padding:14px; box-shadow: 0 20px 60px rgba(0,0,0,0.55);}
 .btn-vio{background:linear-gradient(135deg,#7c3aed,#a855f7); color:#fff; font-weight:900;}
 .btn-vio:hover{filter:brightness(1.05);}
+.db-meta-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:8px;}
+.db-meta-item{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:8px;}
+.db-meta-item .k{font-size:11px;color:#8b949e;}
+.db-meta-item .v{font-size:14px;font-weight:700;word-break:break-word;}
+.db-kanban{display:grid;grid-template-columns:repeat(3,minmax(260px,1fr));gap:12px;align-items:flex-start;}
+.db-col{background:rgba(13,17,23,0.85);border:1px solid #30363d;border-radius:12px;padding:10px;}
+.db-col h4{margin:0 0 8px 0;font-size:14px;}
+@media (max-width: 1100px){.db-kanban{grid-template-columns:1fr;}}
 
 .auth-shell{max-width:360px; margin:220px auto 0; display:flex; flex-direction:column; align-items:center; gap:16px;}
 .auth-gif-wrap{width:100%; display:flex; justify-content:center;}
@@ -260,12 +268,17 @@
 <button class="btn-gray" onclick="uploadDb()">1. Загрузить Excel</button>
 <hr style="border:0; border-top:1px solid #333; margin:10px 0"/>
 <select id="dbSel"></select>
+<button class="btn-gray" onclick="openDbPickerModal()">Выбрать базу (подробно)</button>
 <button class="btn-blue" onclick="activateDb()">2. Активировать базу</button>
 <div style="margin-top:8px; font-size:13px">
   <label style="display:flex; align-items:center; gap:8px; color:#c9d1d9">
     <input id="dbAllowDup" type="checkbox" style="width:auto; margin:0"/>
     Разрешить повторы для этой базы (игнор анти-дубля по истории)
   </label>
+</div>
+<div class="db-meta-grid">
+  <div class="db-meta-item"><div class="k">Активная база</div><div class="v" id="dbActiveName">—</div></div>
+  <div class="db-meta-item"><div class="k">Осталось доступных номеров</div><div class="v" id="dbActiveRemaining">—</div></div>
 </div>
 </div>
 </div>
@@ -1560,9 +1573,22 @@ async function uploadDb() {
 async function loadDbs() {
     const r = await fetch('/api/databases');
     const d = await r.json();
-    dbListCache = Array.isArray(d) ? d : [];
-    document.getElementById('dbSel').innerHTML = dbListCache.map(db => `<option value="${db.id}">${db.name}${db.allowDuplicates ? ' (повторы разрешены)' : ''}</option>`).join('');
+    dbListCache = Array.isArray(d) ? d : (Array.isArray(d.active) ? d.active : []);
+    dbDeletedListCache = (d && Array.isArray(d.deleted)) ? d.deleted : [];
+    const sel = document.getElementById('dbSel');
+    sel.innerHTML = dbListCache.map(db => `<option value="${db.id}">${db.name}${db.allowDuplicates ? ' (повторы разрешены)' : ''}</option>`).join('');
+    const activeDb = dbListCache.find(db => db.isActive) || null;
+    if(activeDb) sel.value = String(activeDb.id);
+    renderAdminDbMeta();
     syncDbAllowDupToggle();
+}
+
+function renderAdminDbMeta(){
+    const activeDb = dbListCache.find(db => db.isActive) || null;
+    const nameEl = document.getElementById('dbActiveName');
+    const remEl = document.getElementById('dbActiveRemaining');
+    if(nameEl) nameEl.textContent = activeDb ? String(activeDb.name || '—') : '—';
+    if(remEl) remEl.textContent = activeDb ? String(Number(activeDb.availableRows || 0)) : '—';
 }
 
 function syncDbAllowDupToggle(){
@@ -1575,6 +1601,7 @@ function syncDbAllowDupToggle(){
 
 async function activateDb() {
     const dbId = document.getElementById('dbSel').value;
+    if(!dbId) return alert('Выбери базу');
     const allowDuplicates = !!document.getElementById('dbAllowDup')?.checked;
     await fetch('/api/set-active-db', {
         method:'POST', headers:{'Content-Type':'application/json'},
@@ -1582,6 +1609,119 @@ async function activateDb() {
     });
     alert(allowDuplicates ? "База выбрана! Повторы для этой базы разрешены." : "База выбрана!");
     await loadDbs();
+}
+
+function fmtDbDate(v){
+    return v ? formatUTC2(v) : '—';
+}
+
+function closeDbPickerModal(){
+    const box = document.getElementById('dbPickerModal');
+    if(box) box.classList.add('hidden');
+}
+
+async function openDbPickerModal(){
+    const box = document.getElementById('dbPickerModal');
+    if(!box) return;
+    await loadDbs();
+    renderDbPickerRows();
+    box.classList.remove('hidden');
+}
+
+function pickDbFromModal(dbId){
+    const sel = document.getElementById('dbSel');
+    if(sel) sel.value = String(dbId);
+    syncDbAllowDupToggle();
+    closeDbPickerModal();
+}
+
+function renderDbPickerRows(){
+    const box = document.getElementById('dbPickerRows');
+    if(!box) return;
+    if(!dbListCache.length && !dbDeletedListCache.length){
+        box.innerHTML = '<div class="muted">Базы не загружены.</div>';
+        return;
+    }
+
+    const activeCol = dbListCache.filter(db => db.isActive);
+    const readyCol = dbListCache.filter(db => !db.isActive && Number(db.availableRows || 0) > 0);
+    const emptyCol = dbListCache.filter(db => !db.isActive && Number(db.availableRows || 0) <= 0);
+
+    const renderDbCard = (db) => `
+      <div class="order-item" style="min-height:auto; padding:12px; border-left-color:${db.isActive ? '#238636' : '#30363d'}; margin-bottom:10px;">
+        <div class="order-head">
+          <div>
+            <div class="order-title" style="font-size:15px">${escapeHtml(db.name || '')}</div>
+            <div class="pillbar" style="margin-top:6px">
+              <span class="pill"><small>ID</small><span class="who">${escapeHtml(String(db.id || ''))}</span></span>
+              <span class="pill"><small>Активна</small><span class="who">${db.isActive ? 'Да' : 'Нет'}</span></span>
+              <span class="pill"><small>Повторы</small><span class="who">${db.allowDuplicates ? 'Да' : 'Нет'}</span></span>
+            </div>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
+            <button class="btn-blue" onclick="pickDbFromModal('${escapeAttr(String(db.id))}')">Выбрать</button>
+            <button class="btn-red" onclick="deleteDb('${escapeAttr(String(db.id))}')">Удалить</button>
+          </div>
+        </div>
+        <div class="db-meta-grid">
+          <div class="db-meta-item"><div class="k">Загружена</div><div class="v">${escapeHtml(fmtDbDate(db.uploadedAt))}</div></div>
+          <div class="db-meta-item"><div class="k">Последняя активация</div><div class="v">${escapeHtml(fmtDbDate(db.lastActivatedAt))}</div></div>
+          <div class="db-meta-item"><div class="k">Строк всего</div><div class="v">${Number(db.totalRows || 0)}</div></div>
+          <div class="db-meta-item"><div class="k">Не прозвонено</div><div class="v">${Number(db.availableRows || 0)}</div></div>
+        </div>
+      </div>
+    `;
+
+    const renderDeletedCard = (db) => `
+      <div class="order-item" style="min-height:auto; padding:12px; border-left-color:#da3633; margin-bottom:10px; opacity:.92;">
+        <div class="order-title" style="font-size:14px">${escapeHtml(db.name || '')}</div>
+        <div class="pillbar" style="margin-top:6px">
+          <span class="pill"><small>Удалена</small><span class="who">${escapeHtml(fmtDbDate(db.deletedAt))}</span></span>
+          <span class="pill"><small>Кем</small><span class="who">${escapeHtml(db.deletedBy || '-')}</span></span>
+        </div>
+        <div class="db-meta-grid">
+          <div class="db-meta-item"><div class="k">Загружена</div><div class="v">${escapeHtml(fmtDbDate(db.uploadedAt))}</div></div>
+          <div class="db-meta-item"><div class="k">Последняя активация</div><div class="v">${escapeHtml(fmtDbDate(db.lastActivatedAt))}</div></div>
+          <div class="db-meta-item"><div class="k">Строк всего</div><div class="v">${Number(db.totalRows || 0)}</div></div>
+          <div class="db-meta-item"><div class="k">Не прозвонено на момент удаления</div><div class="v">${Number(db.availableRows || 0)}</div></div>
+        </div>
+      </div>
+    `;
+
+    box.innerHTML = `
+      <div class="db-kanban">
+        <div class="db-col">
+          <h4>✅ Активные / в работе (${activeCol.length})</h4>
+          ${activeCol.map(renderDbCard).join('') || '<div class="muted">Пусто</div>'}
+        </div>
+        <div class="db-col">
+          <h4>📞 С доступными номерами (${readyCol.length})</h4>
+          ${readyCol.map(renderDbCard).join('') || '<div class="muted">Пусто</div>'}
+        </div>
+        <div class="db-col">
+          <h4>📦 Пустые / исчерпанные (${emptyCol.length})</h4>
+          ${emptyCol.map(renderDbCard).join('') || '<div class="muted">Пусто</div>'}
+        </div>
+      </div>
+      <div class="db-col" style="margin-top:12px;">
+        <h4>🗑 История удалённых (${dbDeletedListCache.length})</h4>
+        ${dbDeletedListCache.slice().reverse().map(renderDeletedCard).join('') || '<div class="muted">Нет удалённых баз.</div>'}
+      </div>
+    `;
+}
+
+async function deleteDb(dbId){
+    const db = dbListCache.find(x => String(x.id) === String(dbId));
+    if(!db) return alert('База не найдена');
+    if(!confirm(`Удалить базу "${db.name}"? История прозвонов сохранится.`)) return;
+    const r = await fetch('/api/databases/delete', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ dbId, login: me.login, role: me.role })
+    });
+    const d = await r.json().catch(()=>({}));
+    if(!r.ok || !d.success) return alert('Не удалось удалить базу: ' + (d.error || r.status));
+    await loadDbs();
+    renderDbPickerRows();
 }
 
 async function addUser() {
@@ -1916,9 +2056,12 @@ async function saveNotesModal(){
     const t = await r.text().catch(()=> '');
     return alert('Не удалось сохранить заметку: ' + (t || r.status));
   }
+  const shouldAdvanceDial = notesModalPayload && notesModalPayload.source === 'dial';
+  const dialStatus = shouldAdvanceDial ? 'В ЗАМЕТКИ' : '';
   closeNotesModal();
   const tab = document.getElementById('tab-notes');
   if(tab && !tab.classList.contains('hidden')) await loadNotes();
+  if(shouldAdvanceDial) await advanceDialAfterTransfer(dialStatus);
 }
 
 
@@ -2054,7 +2197,25 @@ async function addCurrentToCallbacks(){
   });
   const d = await r.json().catch(()=>({}));
   if(!r.ok || !d.success) return alert('Не удалось добавить в перезвон: ' + (d.error || r.status));
-  alert('Добавлено в перезвон');
+  await advanceDialAfterTransfer('В ПЕРЕЗВОН');
+}
+
+async function advanceDialAfterTransfer(status){
+  const c = window.curClient || null;
+  if(!c || !c.phone) return;
+  const note = (document.getElementById('note')?.value || '').trim();
+
+  try{
+    await fetch('/api/save-result', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ status, user: me.login, phone: c.phone, name: c.name, note })
+    });
+  }catch(e){
+    // не блокируем переход к следующему клиенту
+  }
+
+  await nextClient();
 }
 
 async function moveKupatToCallback(id){
@@ -2093,17 +2254,17 @@ async function loadCallbacks(){
   const rows = Array.isArray(data) ? data : [];
   if(!rows.length){ el.innerHTML = '<div class="muted">Список перезвона пуст.</div>'; return; }
 
-  const canToTech = me.role === 'user' || me.role === 'admin';
-  const canToCloser = me.role === 'kupat' || me.role === 'admin';
+  const canToTech = me.role === 'admin';
+  const canToCloser = me.role === 'admin';
   const canTechCallbackActions = me.role === 'tech' || me.role === 'admin';
   const canOperatorCallbackActions = me.role === 'user' || me.role === 'admin';
+  const canKupatCallbackActions = me.role === 'kupat';
 
   el.innerHTML = rows.slice().reverse().map(c => {
     const techActions = canTechCallbackActions
       ? `<button class="btn-yel" onclick="openTechCallbackActionModal('${escapeAttr(c.id)}','return')">НДЗ (Вернуть)</button>
          <button class="btn-red" onclick="openTechCallbackActionModal('${escapeAttr(c.id)}','refuse')">ОТКАЗ</button>
-         <button class="btn-pur" onclick="openTechCallbackActionModal('${escapeAttr(c.id)}','closer')">НА ЗАКРЫВ</button>
-         <button class="btn-gray" onclick="loadCallbacks()">ПЕРЕЗВОН</button>`
+         <button class="btn-pur" onclick="openTechCallbackActionModal('${escapeAttr(c.id)}','closer')">НА ЗАКРЫВ</button>`
       : '';
 
     const operatorActions = canOperatorCallbackActions
@@ -2113,6 +2274,12 @@ async function loadCallbacks(){
          <button class="btn-red" onclick="callbackQuickResult('${escapeAttr(c.id)}','ОТКАЗ')">ОТКАЗ</button>
          <button style="background:#e67e22" onclick="callbackQuickResult('${escapeAttr(c.id)}','НА КУПАТ')">НА КУПАТ</button>
          <button style="background:#238636" onclick="callbackQuickResult('${escapeAttr(c.id)}','ПЕРЕДАЛ')">ПЕРЕДАЛ</button>`
+      : '';
+	  
+
+    const kupatActions = canKupatCallbackActions
+      ? `<button class="btn-red" onclick="callbackQuickResult('${escapeAttr(c.id)}','ОТКАЗ')">ОТКАЗ</button>
+         <button style="background:#238636" onclick="callbackToCloser('${escapeAttr(c.id)}')">ПЕРЕДАТЬ НА ЗАКРЫВ</button>`
       : '';
 	  
     return `
@@ -2138,6 +2305,7 @@ async function loadCallbacks(){
       <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
         ${techActions}
         ${operatorActions}
+        ${kupatActions}
         ${canToCloser ? `<button style="background:#238636" onclick="callbackToCloser('${escapeAttr(c.id)}')">Передать на закрыв</button>` : ''}
         ${canToTech ? `<button class="btn-blue" onclick="callbackToTech('${escapeAttr(c.id)}')">Передать на техника</button>` : ''}
       </div>
@@ -2299,7 +2467,7 @@ async function createOrderToTech(){
 <!-- Tech action modal -->
 <div id="techActionModal" class="modal hidden">
   <div class="modal-backdrop" onclick="closeTechActionModal()"></div>
-  <div class="modal-card" style="max-width:640px;">
+  <div class="modal-card" style="max-width:640px; max-height:82vh; overflow:auto;">
     <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
       <div style="font-weight:900;" id="techActionModalTitle">🛠 Действие</div>
       <button class="btn-gray" onclick="closeTechActionModal()">✕</button>
@@ -2311,7 +2479,7 @@ async function createOrderToTech(){
       <div class="v" id="techActionOperatorInfo"></div>
     </div>
 
-    <textarea id="techActionModalText" style="width:100%; min-height:140px; margin-top:10px;" placeholder="Комментарий..."></textarea>
+    <textarea id="techActionModalText" style="width:100%; min-height:140px; max-height:34vh; margin-top:10px;" placeholder="Комментарий..."></textarea>
 
     <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:10px;">
       <button class="btn-gray" onclick="closeTechActionModal()">Отмена</button>
@@ -2338,6 +2506,19 @@ async function createOrderToTech(){
       <button class="btn-gray" onclick="closeNotesModal()">Отмена</button>
       <button class="btn-pur" onclick="saveNotesModal()">Сохранить</button>
     </div>
+  </div>
+</div>
+
+<!-- DB picker modal -->
+<div id="dbPickerModal" class="modal hidden">
+  <div class="modal-backdrop" onclick="closeDbPickerModal()"></div>
+  <div class="modal-card" style="max-width:980px; max-height:86vh; overflow:auto;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+      <div style="font-weight:900;">🗄 Выбор базы</div>
+      <button class="btn-gray" onclick="closeDbPickerModal()">✕</button>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:8px;">Показывает дату загрузки, последнюю активацию и остаток не прозвоненных номеров.</div>
+    <div id="dbPickerRows" style="margin-top:10px;"></div>
   </div>
 </div>
 
