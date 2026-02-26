@@ -286,6 +286,9 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
 let dbListCache = [];
+let dbListDetailsCache = [];
+let dbDeletedListCache = [];
+let dbDeletedPagination = { page: 1, limit: 20, total: 0, totalPages: 1 };
 
 async function downloadAutoNdz(){
   try{
@@ -1567,19 +1570,27 @@ async function uploadDb() {
     const fd = new FormData();
     fd.append('file', document.getElementById('fileIn').files[0]);
     await fetch('/api/upload', {method:'POST', body:fd});
-    loadDbs();
+    await loadDbs();
 }
 
 async function loadDbs() {
-    const r = await fetch('/api/databases');
+    const r = await fetch('/api/databases?view=compact');
     const d = await r.json();
     dbListCache = Array.isArray(d) ? d : (Array.isArray(d.active) ? d.active : []);
-    dbDeletedListCache = (d && Array.isArray(d.deleted)) ? d.deleted : [];
     const sel = document.getElementById('dbSel');
-    sel.innerHTML = dbListCache.map(db => `<option value="${db.id}">${db.name}${db.allowDuplicates ? ' (повторы разрешены)' : ''}</option>`).join('');
+    sel.innerHTML = dbListCache.map(db => `<option value="${db.id}">${db.name}</option>`).join('');
     const activeDb = dbListCache.find(db => db.isActive) || null;
     if(activeDb) sel.value = String(activeDb.id);
     renderAdminDbMeta();
+    syncDbAllowDupToggle();
+}
+
+async function loadDbsDetails(page = 1, limit = 20) {
+    const r = await fetch(`/api/databases?view=full&page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}`);
+    const d = await r.json();
+    dbListDetailsCache = (d && Array.isArray(d.active)) ? d.active : [];
+    dbDeletedListCache = (d && Array.isArray(d.deleted)) ? d.deleted : [];
+    dbDeletedPagination = (d && d.pagination) ? d.pagination : { page: 1, limit, total: 0, totalPages: 1 };
     syncDbAllowDupToggle();
 }
 
@@ -1595,7 +1606,7 @@ function syncDbAllowDupToggle(){
     const sel = document.getElementById('dbSel');
     const cb = document.getElementById('dbAllowDup');
     if(!sel || !cb) return;
-    const current = dbListCache.find(db => String(db.id) === String(sel.value));
+    const current = dbListDetailsCache.find(db => String(db.id) === String(sel.value));
     cb.checked = !!(current && current.allowDuplicates);
 }
 
@@ -1624,8 +1635,17 @@ async function openDbPickerModal(){
     const box = document.getElementById('dbPickerModal');
     if(!box) return;
     await loadDbs();
+	await loadDbsDetails(1, dbDeletedPagination.limit || 20);
     renderDbPickerRows();
     box.classList.remove('hidden');
+}
+
+async function changeDeletedDbPage(delta){
+    const nextPage = Number(dbDeletedPagination.page || 1) + Number(delta || 0);
+    const totalPages = Number(dbDeletedPagination.totalPages || 1);
+    if(nextPage < 1 || nextPage > totalPages) return;
+    await loadDbsDetails(nextPage, dbDeletedPagination.limit || 20);
+    renderDbPickerRows();
 }
 
 function pickDbFromModal(dbId){
@@ -1638,14 +1658,14 @@ function pickDbFromModal(dbId){
 function renderDbPickerRows(){
     const box = document.getElementById('dbPickerRows');
     if(!box) return;
-    if(!dbListCache.length && !dbDeletedListCache.length){
+    if(!dbListDetailsCache.length && !dbDeletedListCache.length){
         box.innerHTML = '<div class="muted">Базы не загружены.</div>';
         return;
     }
 
-    const activeCol = dbListCache.filter(db => db.isActive);
-    const readyCol = dbListCache.filter(db => !db.isActive && Number(db.availableRows || 0) > 0);
-    const emptyCol = dbListCache.filter(db => !db.isActive && Number(db.availableRows || 0) <= 0);
+    const activeCol = dbListDetailsCache.filter(db => db.isActive);
+    const readyCol = dbListDetailsCache.filter(db => !db.isActive && Number(db.availableRows || 0) > 0);
+    const emptyCol = dbListDetailsCache.filter(db => !db.isActive && Number(db.availableRows || 0) <= 0);
 
     const renderDbCard = (db) => `
       <div class="order-item" style="min-height:auto; padding:12px; border-left-color:${db.isActive ? '#238636' : '#30363d'}; margin-bottom:10px;">
@@ -1704,14 +1724,19 @@ function renderDbPickerRows(){
         </div>
       </div>
       <div class="db-col" style="margin-top:12px;">
-        <h4>🗑 История удалённых (${dbDeletedListCache.length})</h4>
+        <h4>🗑 История удалённых (${Number(dbDeletedPagination.total || 0)})</h4>
         ${dbDeletedListCache.slice().reverse().map(renderDeletedCard).join('') || '<div class="muted">Нет удалённых баз.</div>'}
+        <div style="display:flex; align-items:center; gap:8px; justify-content:flex-end; margin-top:8px;">
+          <button class="btn-gray" onclick="changeDeletedDbPage(-1)" ${Number(dbDeletedPagination.page || 1) <= 1 ? 'disabled' : ''}>← Назад</button>
+          <span class="muted">Страница ${Number(dbDeletedPagination.page || 1)} / ${Number(dbDeletedPagination.totalPages || 1)}</span>
+          <button class="btn-gray" onclick="changeDeletedDbPage(1)" ${Number(dbDeletedPagination.page || 1) >= Number(dbDeletedPagination.totalPages || 1) ? 'disabled' : ''}>Вперёд →</button>
+        </div>
       </div>
     `;
 }
 
 async function deleteDb(dbId){
-    const db = dbListCache.find(x => String(x.id) === String(dbId));
+    const db = dbListDetailsCache.find(x => String(x.id) === String(dbId));
     if(!db) return alert('База не найдена');
     if(!confirm(`Удалить базу "${db.name}"? История прозвонов сохранится.`)) return;
     const r = await fetch('/api/databases/delete', {
@@ -1721,6 +1746,10 @@ async function deleteDb(dbId){
     const d = await r.json().catch(()=>({}));
     if(!r.ok || !d.success) return alert('Не удалось удалить базу: ' + (d.error || r.status));
     await loadDbs();
+    await loadDbsDetails(dbDeletedPagination.page || 1, dbDeletedPagination.limit || 20);
+    if((dbDeletedPagination.page || 1) > (dbDeletedPagination.totalPages || 1)){
+      await loadDbsDetails(dbDeletedPagination.totalPages || 1, dbDeletedPagination.limit || 20);
+    }
     renderDbPickerRows();
 }
 

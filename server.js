@@ -280,6 +280,35 @@ loadUsedPhones();
 let databases = loadData(DB_FILES.db_list, []);
 let deletedDatabases = loadData(DB_FILES.deleted_db_list, []);
 let activeDbId = null;
+const DB_LIST_CACHE_TTL_MS = 3000;
+const dbListCache = new Map();
+
+function dbListCacheKey(view, page, limit) {
+  return `${String(view || 'full')}|${Number(page || 1)}|${Number(limit || 20)}`;
+}
+
+function clearDbListCache() {
+  dbListCache.clear();
+}
+
+function getCachedDbList(view, page, limit) {
+  const key = dbListCacheKey(view, page, limit);
+  const cached = dbListCache.get(key);
+  if (!cached) return null;
+  if (Date.now() > cached.expiresAt) {
+    dbListCache.delete(key);
+    return null;
+  }
+  return cached.payload;
+}
+
+function setCachedDbList(view, page, limit, payload) {
+  const key = dbListCacheKey(view, page, limit);
+  dbListCache.set(key, {
+    expiresAt: Date.now() + DB_LIST_CACHE_TTL_MS,
+    payload
+  });
+}
 
 function dbAvailableRowsCount(db) {
   if (!db || !Array.isArray(db.rows)) return 0;
@@ -1188,12 +1217,33 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
     rows: rows.filter((r) => r.length > 0 && r[0]),
   });
   saveData(DB_FILES.db_list, databases);
+  clearDbListCache();
 
   res.json({ success: true });
 });
 
 app.get('/api/databases', (req, res) => {
-  const list = (Array.isArray(databases) ? databases : []).map((db) => ({
+  const view = String(req.query.view || 'full').toLowerCase() === 'compact' ? 'compact' : 'full';
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+
+  const cached = getCachedDbList(view, page, limit);
+  if (cached) return res.json(cached);
+
+  const activeBase = (Array.isArray(databases) ? databases : []).map((db) => ({
+    id: db.id,
+    name: db.name,
+    isActive: String(db.id) === String(activeDbId),
+    availableRows: dbAvailableRowsCount(db)
+  }));
+
+  if (view === 'compact') {
+    const payload = { active: activeBase };
+    setCachedDbList(view, page, limit, payload);
+    return res.json(payload);
+  }
+
+  const active = (Array.isArray(databases) ? databases : []).map((db) => ({
     id: db.id,
     name: db.name,
     allowDuplicates: !!db.allowDuplicates,
@@ -1203,7 +1253,10 @@ app.get('/api/databases', (req, res) => {
     availableRows: dbAvailableRowsCount(db),
     isActive: String(db.id) === String(activeDbId)
   }));
-  const deleted = deletedDatabases.map((db) => ({
+
+  const deletedStart = (page - 1) * limit;
+  const deletedSlice = deletedDatabases.slice(deletedStart, deletedStart + limit);
+  const deleted = deletedSlice.map((db) => ({
     id: db.id,
     name: db.name,
     uploadedAt: db.uploadedAt || null,
@@ -1213,7 +1266,19 @@ app.get('/api/databases', (req, res) => {
     availableRows: Number(db.availableRows || 0),
     deletedBy: db.deletedBy || ''
   }));
-  res.json({ active: list, deleted });
+
+  const payload = {
+    active,
+    deleted,
+    pagination: {
+      page,
+      limit,
+      total: deletedDatabases.length,
+      totalPages: Math.max(Math.ceil(deletedDatabases.length / limit), 1)
+    }
+  };
+  setCachedDbList(view, page, limit, payload);
+  res.json(payload);
 });
 
 app.post('/api/databases/delete', (req, res) => {
@@ -1244,6 +1309,7 @@ app.post('/api/databases/delete', (req, res) => {
     usedIndices.clear();
   }
   saveData(DB_FILES.db_list, databases);
+  clearDbListCache();
   res.json({ success: true, archived: archiveItem });
 });
 
@@ -1262,6 +1328,7 @@ app.post('/api/set-active-db', (req, res) => {
   }
 
   usedIndices.clear();
+  clearDbListCache();
   res.json({ success: true, allowDuplicates: activeDbAllowDuplicates });
 });
 
